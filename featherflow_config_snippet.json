@@ -1,0 +1,12 @@
+{
+  "tools": {
+    "mcpServers": {
+      "raspa2": {
+        "command": "python",
+        "args": ["-m", "raspa_mcp.server"],
+        "toolTimeout": 30,
+        "env": {}
+      }
+    }
+  }
+}

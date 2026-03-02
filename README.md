@@ -96,7 +96,7 @@ uv run python -m raspa_mcp.installer
 ```
 
 This single command:
-- Detects build tools (`git`, `gcc`, `autoconf`, `automake`) — install them first if missing
+- Checks for build tools (`git`, `gcc`, `make`, `autoconf`, `automake`, `libtool`) and **installs any that are missing automatically** via `apt-get` / `dnf` / `yum` / `brew` etc.
 - Clones [RASPA2 from GitHub](https://github.com/iRASPA/RASPA2) and compiles from source
 - Installs to `/opt/raspa2` by default (override with `--prefix`)
 - Writes `RASPA_DIR` and `PATH` exports to your shell RC file automatically
@@ -113,16 +113,6 @@ After the command finishes, reload your shell:
 
 ```bash
 source ~/.bashrc   # or ~/.zshrc, ~/.profile, etc.
-```
-
-**Build dependencies (Ubuntu/Debian):**
-```bash
-sudo apt-get install git gcc autoconf automake libtool
-```
-
-**Build dependencies (macOS):**
-```bash
-brew install autoconf automake libtool
 ```
 
 > RASPA2 source: [https://github.com/iRASPA/RASPA2](https://github.com/iRASPA/RASPA2)  

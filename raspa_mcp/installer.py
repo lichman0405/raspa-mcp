@@ -172,27 +172,111 @@ def _run(cmd: list[str], cwd: str | None = None, env: dict | None = None) -> tup
 
 
 
+def _detect_pkg_manager() -> tuple[str, list[str]] | None:
+    """
+    Detect the system package manager.
+    Returns (manager_name, base_install_cmd) or None if undetectable.
+    """
+    candidates = [
+        ("apt-get",  ["sudo", "apt-get", "install", "-y"]),
+        ("dnf",      ["sudo", "dnf",     "install", "-y"]),
+        ("yum",      ["sudo", "yum",     "install", "-y"]),
+        ("pacman",   ["sudo", "pacman",  "-S", "--noconfirm"]),
+        ("zypper",   ["sudo", "zypper",  "install", "-y"]),
+        ("brew",     ["brew", "install"]),
+    ]
+    for name, cmd in candidates:
+        if shutil.which(name):
+            return name, cmd
+    return None
+
+
+# Mapping from binary name → package name(s) per package manager
+_PKG_MAP: dict[str, dict[str, list[str]]] = {
+    "git":      {"apt-get": ["git"],     "dnf": ["git"],      "yum": ["git"],
+                 "pacman":  ["git"],     "zypper": ["git"],   "brew": ["git"]},
+    "gcc":      {"apt-get": ["gcc"],     "dnf": ["gcc"],      "yum": ["gcc"],
+                 "pacman":  ["gcc"],     "zypper": ["gcc"],   "brew": ["gcc"]},
+    "make":     {"apt-get": ["make"],    "dnf": ["make"],     "yum": ["make"],
+                 "pacman":  ["make"],    "zypper": ["make"],  "brew": ["make"]},
+    "autoconf": {"apt-get": ["autoconf"],"dnf": ["autoconf"], "yum": ["autoconf"],
+                 "pacman":  ["autoconf"],"zypper": ["autoconf"],"brew": ["autoconf"]},
+    "automake": {"apt-get": ["automake"],"dnf": ["automake"], "yum": ["automake"],
+                 "pacman":  ["automake"],"zypper": ["automake"],"brew": ["automake"]},
+    "libtool":  {"apt-get": ["libtool"], "dnf": ["libtool"],  "yum": ["libtool"],
+                 "pacman":  ["libtool"], "zypper": ["libtool"],"brew": ["libtool"]},
+}
+
+
+def _auto_install_build_tools(missing: list[str], log: list[str]) -> list[str]:
+    """
+    Attempt to install missing build tools via the system package manager.
+    Returns a list of error strings (empty = all installed successfully).
+    """
+    pm = _detect_pkg_manager()
+    if pm is None:
+        return [
+            f"Cannot auto-install {missing}: no recognised package manager found. "
+            "Install manually: git gcc autoconf automake libtool"
+        ]
+
+    pm_name, base_cmd = pm
+    pkgs: list[str] = []
+    for tool in missing:
+        tool_pkgs = _PKG_MAP.get(tool, {}).get(pm_name, [tool])
+        pkgs.extend(tool_pkgs)
+
+    pkgs = list(dict.fromkeys(pkgs))  # dedup, preserve order
+    cmd = base_cmd + pkgs
+    log.append(f"Auto-installing build tools via {pm_name}: {' '.join(cmd)}")
+    rc, out = _run(cmd)
+    log.append(out[-2000:])
+    if rc != 0:
+        return [
+            f"Auto-install via {pm_name} failed (exit {rc}). "
+            f"Run manually: {' '.join(cmd)}"
+        ]
+
+    log.append("Build tools installed successfully.")
+    return []
+
+
 def install_from_source(install_prefix: str = "/opt/raspa2") -> dict:
     """
     Clone RASPA2 from GitHub and compile+install it.
 
-    Requires: git, gcc, autoconf, automake, libtool on PATH.
+    Missing build tools (git, gcc, autoconf, automake, libtool) are installed
+    automatically via the system package manager (apt-get / dnf / yum /
+    pacman / zypper / brew).
     """
     import tempfile
     log: list[str] = []
     errors: list[str] = []
 
-    # Check build tools
-    missing_tools = [t for t in ["git", "gcc", "autoconf", "automake"] if not shutil.which(t)]
+    # Check build tools — auto-install any that are missing
+    required = ["git", "gcc", "make", "autoconf", "automake", "libtool"]
+    missing_tools = [t for t in required if not shutil.which(t)]
     if missing_tools:
-        return {
-            "success": False,
-            "errors": [
-                f"Missing build tools: {', '.join(missing_tools)}. "
-                "Install with: sudo apt-get install git gcc autoconf automake libtool"
-            ],
-            "log": [],
-        }
+        log.append(f"Missing build tools: {', '.join(missing_tools)}. Attempting auto-install ...")
+        errs = _auto_install_build_tools(missing_tools, log)
+        if errs:
+            return {"success": False, "errors": errs, "log": log}
+        # Re-check after install (PATH may need refresh for some tools)
+        still_missing = [t for t in missing_tools if not shutil.which(t)]
+        if still_missing:
+            # Try sourcing common bin paths
+            for extra in ["/usr/bin", "/usr/local/bin"]:
+                os.environ["PATH"] = extra + ":" + os.environ.get("PATH", "")
+            still_missing = [t for t in still_missing if not shutil.which(t)]
+        if still_missing:
+            return {
+                "success": False,
+                "errors": [
+                    f"Tools still not on PATH after install: {', '.join(still_missing)}. "
+                    "Open a new shell and retry."
+                ],
+                "log": log,
+            }
 
     prefix_path = Path(install_prefix)
     prefix_path.mkdir(parents=True, exist_ok=True)

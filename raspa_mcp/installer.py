@@ -347,10 +347,14 @@ def install_from_source(install_prefix: str = str(Path.home() / ".local" / "rasp
                 return {"success": False, "errors": errors, "log": log}
 
         # CFLAGS: suppress warnings-as-errors that break compilation on modern GCC.
-        # GCC 14+ promotes -Wincompatible-pointer-types to error by default;
-        # RASPA2 src has printf(stderr, ...) instead of fprintf which triggers it.
+        # -std=gnu11: fixes "conflicting types for 'CFBiasingLambda'" on GCC 14.
+        #   In C23/gnu23 (GCC 14 ubuntu default), empty `()` means `(void)`, breaking
+        #   RASPA2's declaration `REAL CFBiasingLambda()` vs definition `(int, int)`.
+        #   gnu11 keeps old K&R semantics where `()` means "unspecified arguments".
+        # -Wno-error / -Wno-incompatible-pointer-types: fix printf(stderr,...) in framework.c.
         build_env = {
             "CFLAGS": (
+                "-std=gnu11 "
                 "-Wno-error "
                 "-Wno-unused-result "
                 "-Wno-implicit-function-declaration "

@@ -116,14 +116,17 @@ def check_environment() -> RaspaEnvironment:
     # 3. Check essential force field files under $RASPA_DIR
     if env.raspa_dir_valid:
         raspa_path = Path(raspa_dir)
-        # RASPA2 looks for files in share/raspa2/ (conda) or $RASPA_DIR directly
+        # RASPA2 looks for files in share/raspa/ (source build) or
+        # share/raspa2/ (conda) or $RASPA_DIR directly
         ff_candidates = [
-            raspa_path / "share" / "raspa2" / "forcefield",
-            raspa_path / "forcefield",
+            raspa_path / "share" / "raspa" / "forcefield",   # source build default
+            raspa_path / "share" / "raspa2" / "forcefield",  # conda
+            raspa_path / "forcefield",                        # bare prefix
         ]
         mol_candidates = [
-            raspa_path / "share" / "raspa2" / "molecules" / "TraPPE",
-            raspa_path / "molecules" / "TraPPE",
+            raspa_path / "share" / "raspa" / "molecules" / "TraPPE",   # source build
+            raspa_path / "share" / "raspa2" / "molecules" / "TraPPE",  # conda
+            raspa_path / "molecules" / "TraPPE",                        # bare prefix
         ]
         ff_found = any(p.exists() for p in ff_candidates)
         mol_found = any(p.exists() for p in mol_candidates)
@@ -134,12 +137,15 @@ def check_environment() -> RaspaEnvironment:
             if not ff_found:
                 env.issues.append(
                     "Force field directory not found under $RASPA_DIR. "
-                    "Expected: $RASPA_DIR/share/raspa2/forcefield/ or $RASPA_DIR/forcefield/"
+                    "Expected: $RASPA_DIR/share/raspa/forcefield/ (source build) "
+                    "or $RASPA_DIR/share/raspa2/forcefield/ (conda) "
+                    "or $RASPA_DIR/forcefield/"
                 )
             if not mol_found:
                 env.issues.append(
                     "Molecule definitions not found under $RASPA_DIR. "
-                    "Expected: $RASPA_DIR/share/raspa2/molecules/TraPPE/"
+                    "Expected: $RASPA_DIR/share/raspa/molecules/TraPPE/ (source build) "
+                    "or $RASPA_DIR/share/raspa2/molecules/TraPPE/ (conda)"
                 )
 
     # 4. Final readiness

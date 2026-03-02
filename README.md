@@ -98,12 +98,12 @@ uv run python -m raspa_mcp.installer
 This single command:
 - Checks for build tools (`git`, `gcc`, `make`, `autoconf`, `automake`, `libtool`) and **installs any that are missing automatically** via `apt-get` / `dnf` / `yum` / `brew` etc.
 - Clones [RASPA2 from GitHub](https://github.com/iRASPA/RASPA2) and compiles from source
-- Installs to `/opt/raspa2` by default (override with `--prefix`)
+- Installs to `~/.local/raspa2` by default (override with `--prefix`)
 - Writes `RASPA_DIR` and `PATH` exports to your shell RC file automatically
 
 ```bash
 # custom install prefix:
-uv run python -m raspa_mcp.installer --prefix $HOME/.local/raspa2
+uv run python -m raspa_mcp.installer --prefix /opt/raspa2
 
 # force reinstall even if already present:
 uv run python -m raspa_mcp.installer --force

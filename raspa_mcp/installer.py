@@ -241,7 +241,7 @@ def _auto_install_build_tools(missing: list[str], log: list[str]) -> list[str]:
     return []
 
 
-def install_from_source(install_prefix: str = "/opt/raspa2") -> dict:
+def install_from_source(install_prefix: str = str(Path.home() / ".local" / "raspa2")) -> dict:
     """
     Clone RASPA2 from GitHub and compile+install it.
 
@@ -428,8 +428,8 @@ def setup(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--prefix",
-        default="/opt/raspa2",
-        help="Installation prefix (default: /opt/raspa2)",
+        default=str(Path.home() / ".local" / "raspa2"),
+        help="Installation prefix (default: ~/.local/raspa2)",
     )
     parser.add_argument(
         "--force",

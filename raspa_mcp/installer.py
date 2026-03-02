@@ -171,6 +171,49 @@ def _run(cmd: list[str], cwd: str | None = None, env: dict | None = None) -> tup
     return result.returncode, output
 
 
+def _run_streaming(
+    cmd: list[str],
+    cwd: str | None = None,
+    env: dict | None = None,
+    timeout: int = 1800,
+) -> tuple[int, str]:
+    """
+    Run a command, printing each line to stdout in real-time.
+    Returns (returncode, combined_output).
+    Used for long-running steps (git clone, configure, make) so the user
+    can see progress instead of a blank terminal.
+    """
+    import threading
+
+    merged: list[str] = []
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env={**os.environ, **(env or {})},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    def _reader() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            merged.append(line)
+            print(line, flush=True)
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    t.join()
+    return proc.returncode, "\n".join(merged)
+
+
 
 def _detect_pkg_manager() -> tuple[str, list[str]] | None:
     """
@@ -274,9 +317,12 @@ def install_from_source(install_prefix: str = str(Path.home() / ".local" / "rasp
         log.append(f"Build directory: {tmpdir}")
 
         # Clone
-        log.append("Cloning https://github.com/iraspa/raspa2 ...")
-        rc, out = _run(["git", "clone", "--depth=1",
-                        "https://github.com/iraspa/raspa2.git", "raspa2"], cwd=tmpdir)
+        print("[raspa-mcp-setup] Cloning RASPA2 from GitHub ...", flush=True)
+        rc, out = _run_streaming(
+            ["git", "clone", "--depth=1",
+             "https://github.com/iraspa/raspa2.git", "raspa2"],
+            cwd=tmpdir,
+        )
         log.append(out[-2000:])
         if rc != 0:
             errors.append("git clone failed.")
@@ -293,32 +339,45 @@ def install_from_source(install_prefix: str = str(Path.home() / ".local" / "rasp
             ["automake", "--add-missing"],
             ["autoconf"],
         ]:
-            log.append(f"Running: {' '.join(step_cmd)}")
+            print(f"[raspa-mcp-setup] Running: {' '.join(step_cmd)}", flush=True)
             rc, out = _run(step_cmd, cwd=src_dir)
             if rc != 0 and step_cmd[0] not in ("rm", "mkdir"):
                 errors.append(f"Step '{step_cmd[0]}' failed (exit {rc}).")
                 log.append(out[-1000:])
                 return {"success": False, "errors": errors, "log": log}
 
+        # CFLAGS: suppress warnings-as-errors that break compilation on modern GCC
+        build_env = {
+            "CFLAGS": "-Wno-error -Wno-unused-result -Wno-implicit-function-declaration"
+        }
+
         # Configure
-        log.append(f"Running: ./configure --prefix={install_prefix}")
-        rc, out = _run(["./configure", f"--prefix={install_prefix}"], cwd=src_dir)
+        print(f"[raspa-mcp-setup] Running: ./configure --prefix={install_prefix}", flush=True)
+        rc, out = _run_streaming(
+            ["./configure", f"--prefix={install_prefix}"],
+            cwd=src_dir,
+            env=build_env,
+        )
         log.append(out[-2000:])
         if rc != 0:
             errors.append("./configure failed.")
             return {"success": False, "errors": errors, "log": log}
 
         # Make
-        log.append("Running: make ...")
-        rc, out = _run(["make", "-j4"], cwd=src_dir)
+        print("[raspa-mcp-setup] Running: make -j4  (this may take several minutes) ...", flush=True)
+        rc, out = _run_streaming(
+            ["make", "-j4"],
+            cwd=src_dir,
+            env=build_env,
+        )
         log.append(out[-2000:])
         if rc != 0:
             errors.append("make failed.")
             return {"success": False, "errors": errors, "log": log}
 
         # Make install
-        log.append("Running: make install ...")
-        rc, out = _run(["make", "install"], cwd=src_dir)
+        print("[raspa-mcp-setup] Running: make install ...", flush=True)
+        rc, out = _run_streaming(["make", "install"], cwd=src_dir)
         log.append(out[-2000:])
         if rc != 0:
             errors.append("make install failed.")

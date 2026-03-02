@@ -123,10 +123,16 @@ def check_environment() -> RaspaEnvironment:
             raspa_path / "share" / "raspa2" / "forcefield",  # conda
             raspa_path / "forcefield",                        # bare prefix
         ]
+        # For molecules, accept any non-empty molecules/ directory.
+        # Source builds install ExampleDefinitions/ (not TraPPE/); conda installs TraPPE/.
         mol_candidates = [
-            raspa_path / "share" / "raspa" / "molecules" / "TraPPE",   # source build
-            raspa_path / "share" / "raspa2" / "molecules" / "TraPPE",  # conda
-            raspa_path / "molecules" / "TraPPE",                        # bare prefix
+            raspa_path / "share" / "raspa" / "molecules" / "TraPPE",          # conda-style under source prefix
+            raspa_path / "share" / "raspa" / "molecules" / "ExampleDefinitions",  # source build actual
+            raspa_path / "share" / "raspa" / "molecules",                          # source build parent
+            raspa_path / "share" / "raspa2" / "molecules" / "TraPPE",         # conda
+            raspa_path / "share" / "raspa2" / "molecules",                     # conda parent
+            raspa_path / "molecules" / "TraPPE",                               # bare prefix
+            raspa_path / "molecules",                                           # bare prefix parent
         ]
         ff_found = any(p.exists() for p in ff_candidates)
         mol_found = any(p.exists() for p in mol_candidates)
@@ -144,7 +150,7 @@ def check_environment() -> RaspaEnvironment:
             if not mol_found:
                 env.issues.append(
                     "Molecule definitions not found under $RASPA_DIR. "
-                    "Expected: $RASPA_DIR/share/raspa/molecules/TraPPE/ (source build) "
+                    "Expected: $RASPA_DIR/share/raspa/molecules/ (source build) "
                     "or $RASPA_DIR/share/raspa2/molecules/TraPPE/ (conda)"
                 )
 

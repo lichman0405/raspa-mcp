@@ -115,6 +115,8 @@ After the command finishes, reload your shell:
 source ~/.bashrc   # or ~/.zshrc, ~/.profile, etc.
 ```
 
+> **Compatibility**: Tested on Ubuntu 24.04 (GCC 14). The installer automatically applies `-std=gnu11` and other compiler flags to work around known issues in the RASPA2 source tree on modern GCC versions.
+
 > RASPA2 source: [https://github.com/iRASPA/RASPA2](https://github.com/iRASPA/RASPA2)  
 > Reference: D. Dubbeldam, S. Calero, D.E. Ellis, R.Q. Snurr, *Mol. Simul.* **42**, 81–101 (2016)
 

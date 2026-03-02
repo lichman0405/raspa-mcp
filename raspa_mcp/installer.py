@@ -261,22 +261,11 @@ def install_from_source(install_prefix: str = "/opt/raspa2") -> dict:
         errs = _auto_install_build_tools(missing_tools, log)
         if errs:
             return {"success": False, "errors": errs, "log": log}
-        # Re-check after install (PATH may need refresh for some tools)
-        still_missing = [t for t in missing_tools if not shutil.which(t)]
-        if still_missing:
-            # Try sourcing common bin paths
-            for extra in ["/usr/bin", "/usr/local/bin"]:
+        # Ensure newly installed binaries are visible in this process and
+        # all child subprocesses — apt-get installs to /usr/bin by default.
+        for extra in ["/usr/local/bin", "/usr/bin", "/bin"]:
+            if extra not in os.environ.get("PATH", ""):
                 os.environ["PATH"] = extra + ":" + os.environ.get("PATH", "")
-            still_missing = [t for t in still_missing if not shutil.which(t)]
-        if still_missing:
-            return {
-                "success": False,
-                "errors": [
-                    f"Tools still not on PATH after install: {', '.join(still_missing)}. "
-                    "Open a new shell and retry."
-                ],
-                "log": log,
-            }
 
     prefix_path = Path(install_prefix)
     prefix_path.mkdir(parents=True, exist_ok=True)

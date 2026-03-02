@@ -22,9 +22,6 @@ dev = [
     "ruff>=0.4",
 ]
 
-[tool.uv]
-requires-python = ">=3.11"
-
 [project.scripts]
 raspa-mcp = "raspa_mcp.server:main"
 raspa-mcp-setup = "raspa_mcp.installer:setup"

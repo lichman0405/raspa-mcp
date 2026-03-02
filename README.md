@@ -92,7 +92,7 @@ uv sync
 ### 2. Compile and configure RASPA2 (one-time setup)
 
 ```bash
-uv run raspa-mcp-setup
+uv run python -m raspa_mcp.installer
 ```
 
 This single command:
@@ -103,10 +103,10 @@ This single command:
 
 ```bash
 # custom install prefix:
-uv run raspa-mcp-setup --prefix $HOME/.local/raspa2
+uv run python -m raspa_mcp.installer --prefix $HOME/.local/raspa2
 
 # force reinstall even if already present:
-uv run raspa-mcp-setup --force
+uv run python -m raspa_mcp.installer --force
 ```
 
 After the command finishes, reload your shell:

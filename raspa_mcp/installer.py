@@ -432,3 +432,7 @@ def setup(argv: list[str] | None = None) -> None:
         f"\nReload your shell or run:\n"
         f"  source {rc_file}"
     )
+
+
+if __name__ == "__main__":
+    setup()

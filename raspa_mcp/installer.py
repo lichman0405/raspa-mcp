@@ -56,22 +56,62 @@ class RaspaEnvironment:
         }
 
 
+
+# Well-known installation prefixes tried when PATH / RASPA_DIR are not set
+# (e.g. when launched as a non-interactive subprocess by featherflow).
+_KNOWN_PREFIXES: list[Path] = [
+    Path.home() / ".local" / "raspa2",
+    Path("/opt/raspa2"),
+    Path("/usr/local"),
+    Path("/usr"),
+]
+
+
+def _inject_raspa_env(prefix: Path) -> None:
+    """
+    Unconditionally inject *prefix*/bin into PATH and set RASPA_DIR=*prefix*
+    in the current process environment so that subsequent subprocess calls
+    (e.g. `simulate`) can find the binary and data files even when the parent
+    process was spawned without the user's shell RC file.
+    """
+    bin_dir = str(prefix / "bin")
+    current_path = os.environ.get("PATH", "")
+    if bin_dir not in current_path.split(os.pathsep):
+        os.environ["PATH"] = bin_dir + os.pathsep + current_path
+    os.environ.setdefault("RASPA_DIR", str(prefix))
+
+
 def check_environment() -> RaspaEnvironment:
     """
     Probe the current environment for a working RASPA2 installation.
     Returns a RaspaEnvironment dataclass with full diagnostic info.
+
+    When launched as a non-interactive subprocess (e.g. by featherflow),
+    ~/.bashrc is NOT sourced, so PATH and RASPA_DIR may be missing.
+    This function automatically scans well-known install prefixes and
+    injects the required env vars into os.environ so the server stays
+    functional without any manual PATH export.
     """
     env = RaspaEnvironment()
 
-    # 1. Check 'simulate' binary
+    # ── 1. Locate 'simulate' binary ───────────────────────────────────────
     simulate_path = shutil.which("simulate")
+
+    if not simulate_path:
+        # PATH-less launch (featherflow subprocess): scan known prefixes
+        for prefix in _KNOWN_PREFIXES:
+            candidate = prefix / "bin" / "simulate"
+            if candidate.is_file():
+                _inject_raspa_env(prefix)
+                simulate_path = str(candidate)
+                break
+
     if simulate_path:
         env.simulate_found = True
         env.simulate_path = simulate_path
-        # Try to get version
         try:
             out = subprocess.run(
-                ["simulate", "--version"],
+                [simulate_path, "--version"],
                 capture_output=True, text=True, timeout=10
             )
             env.version = (out.stdout + out.stderr).strip().splitlines()[0] if (
@@ -85,11 +125,19 @@ def check_environment() -> RaspaEnvironment:
             "RASPA2 is not installed or not added to PATH."
         )
         env.suggestions.append(
-            "Run: raspa-mcp-setup  (compiles RASPA2 from source into /opt/raspa2)"
+            "Run: raspa-mcp-setup  (compiles RASPA2 from source into ~/.local/raspa2)"
         )
 
-    # 2. Check RASPA_DIR
+    # ── 2. Locate RASPA_DIR ───────────────────────────────────────────────
     raspa_dir = os.environ.get("RASPA_DIR", "")
+
+    if not raspa_dir and simulate_path:
+        # Infer from the binary path: .../bin/simulate → prefix
+        inferred = Path(simulate_path).parent.parent
+        if inferred.exists():
+            os.environ["RASPA_DIR"] = str(inferred)
+            raspa_dir = str(inferred)
+
     if raspa_dir:
         env.raspa_dir_set = True
         env.raspa_dir = raspa_dir

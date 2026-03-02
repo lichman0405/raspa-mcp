@@ -19,7 +19,7 @@
 
 Running RASPA2 correctly requires deep expertise: choosing the right ensemble, setting unit cell replications, picking force fields, validating Ewald summation parameters, and parsing Fortran-style output files. Historically this knowledge lived in the heads of computational chemists and nowhere else.
 
-`raspa-mcp` encodes that expertise as **24 structured MCP tools** — covering every major simulation type RASPA2 supports — so that an LLM agent like [featherflow](https://github.com/your-org/featherflow) can autonomously design, validate, execute, and interpret molecular simulations without human intervention.
+`raspa-mcp` encodes that expertise as **20 structured MCP tools** — covering every major simulation type RASPA2 supports — so that an LLM agent like [featherflow](https://github.com/lichman0405/featherflow) can autonomously design, validate, execute, and interpret molecular simulations without human intervention.
 
 ---
 
@@ -58,7 +58,7 @@ Running RASPA2 correctly requires deep expertise: choosing the right ensemble, s
 - **Density slice plotting** — heatmap PNG from 3D grid data
 
 ### Built-in Knowledge Base
-- **5 molecules**: CO2, N2, CH4, H2O, helium, n-butane (TraPPE / SPC-E)
+- **6 molecules**: CO2, N2, CH4, H2O, helium, n-butane (TraPPE / SPC-E)
 - **5 force fields**: TraPPE-CO2/N2/CH4/H2O, UFF — with mixing rules, pseudo-atom definitions
 - **Input validator** — catches 20+ common mistakes before RASPA2 ever runs
 - **Environment checker** — reports RASPA2 readiness on server startup
@@ -124,21 +124,27 @@ source ~/.bashrc   # or ~/.zshrc, ~/.profile, etc.
 
 ## Quickstart — featherflow
 
-Add to your `featherflow` config:
+Register raspa-mcp with one command (run in the featherflow project directory):
 
-```json
-{
-  "tools": {
-    "mcpServers": {
-      "raspa2": {
-        "command": "uv",
-        "args": ["run", "raspa-mcp"],
-        "toolTimeout": 30,
-        "env": {}
-      }
-    }
-  }
-}
+```bash
+featherflow config mcp add raspa2 \
+  --command uv \
+  --arg run \
+  --arg --directory \
+  --arg /path/to/raspa-mcp \
+  --arg raspa-mcp \
+  --lazy \
+  --description "RASPA2 molecular simulation: GCMC, MD, adsorption isotherms, force fields, output parsing" \
+  --timeout 600
+```
+
+> `--lazy`: raspa-mcp exposes 20 tools — lazy mode registers a single gateway entry-point instead of all tools upfront, keeping per-call LLM token cost low.  
+> `--timeout 600`: RASPA2 simulations can take minutes; featherflow recommends 300–600 s for scientific computing MCP servers.
+
+Verify:
+
+```bash
+featherflow config mcp list
 ```
 
 Your agent can now autonomously:

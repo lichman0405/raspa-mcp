@@ -38,15 +38,7 @@ from mcp.server.fastmcp import FastMCP
 from raspa_mcp.data.forcefields import FORCEFIELD_META, MIXING_RULES, PSEUDO_ATOMS
 from raspa_mcp.data.molecules import MOLECULE_DEFINITIONS, MOLECULE_META
 from raspa_mcp.data.templates import TEMPLATE_PARAMS, TEMPLATES
-from raspa_mcp.installer import (
-    check_environment as _check_env,
-)
-from raspa_mcp.installer import (
-    install_from_source as _install_source,
-)
-from raspa_mcp.installer import (
-    install_via_conda as _install_conda,
-)
+from raspa_mcp.installer import check_environment as _check_env
 from raspa_mcp.parser import parse_density_grid as _parse_density_grid
 from raspa_mcp.parser import parse_msd_output as _parse_msd_output
 from raspa_mcp.parser import parse_output as _parse_output
@@ -804,46 +796,10 @@ def check_raspa2_environment() -> dict:
       2. RASPA_DIR environment variable is set and valid
       3. Force field and molecule files exist under $RASPA_DIR
 
-    Returns a full diagnostic report. If ready=False, call
-    install_raspa2() to attempt automatic installation.
+    Returns a full diagnostic report.
+    If ready=False, run:  raspa-mcp-setup  (compiles RASPA2 from source).
     """
     return _check_env().to_dict()
-
-
-@mcp.tool()
-def install_raspa2(
-    method: Literal["conda", "source"] = "conda",
-    install_prefix: str = "/opt/raspa2",
-    conda_env: str = "base",
-) -> dict:
-    """
-    Automatically download, compile/install, and configure RASPA2.
-
-    Two methods:
-      - "conda"  : conda install -c conda-forge raspa2  (recommended, fast)
-      - "source" : git clone + autoconf + make install  (no conda required)
-
-    Args:
-        method:         "conda" or "source"
-        install_prefix: Installation directory for source method (default /opt/raspa2)
-        conda_env:      Conda environment name for conda method (default "base")
-
-    After installation, the tool returns the exact lines to add to ~/.bashrc
-    to configure PATH and RASPA_DIR. The agent should write these to ~/.bashrc
-    and inform the user to run: source ~/.bashrc
-
-    Note: source method requires git, gcc, autoconf, automake on PATH.
-    On Ubuntu/Debian: sudo apt-get install git gcc autoconf automake libtool
-    """
-    if method == "conda":
-        return _install_conda(conda_env=conda_env)
-    elif method == "source":
-        return _install_source(install_prefix=install_prefix)
-    else:
-        return {
-            "success": False,
-            "errors": [f"Unknown method '{method}'. Use 'conda' or 'source'."],
-        }
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1052,14 +1008,13 @@ def plot_isotherm_comparison(
 # ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Startup probe: report RASPA2 status (visible in featherflow logs)
+    # Startup probe: report RASPA2 status (visible in server logs)
     env = _check_env()
     if env.ready:
         logger.info("RASPA2 ready: {} | RASPA_DIR={}", env.simulate_path, env.raspa_dir)
     else:
         logger.warning(
-            "RASPA2 NOT ready: {}. "
-            "Call check_raspa2_environment() for details or install_raspa2() to auto-install.",
+            "RASPA2 NOT ready: {}. Run 'raspa-mcp-setup' to install RASPA2 from source.",
             "; ".join(env.issues),
         )
     mcp.run()

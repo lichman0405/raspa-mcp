@@ -61,36 +61,71 @@ Running RASPA2 correctly requires deep expertise: choosing the right ensemble, s
 - **5 molecules**: CO2, N2, CH4, H2O, helium, n-butane (TraPPE / SPC-E)
 - **5 force fields**: TraPPE-CO2/N2/CH4/H2O, UFF — with mixing rules, pseudo-atom definitions
 - **Input validator** — catches 20+ common mistakes before RASPA2 ever runs
-- **Environment checker & installer** — conda and source install, 6-shell support
+- **Environment checker** — reports RASPA2 readiness on server startup
 
 ---
 
 ## Installation
 
+### 0. Install uv (if not already present)
+
 ```bash
-# 1. Clone
-git clone https://github.com/your-org/raspa-mcp
+# Linux / macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+> [uv](https://github.com/astral-sh/uv) is a fast Python package manager. It replaces `pip` + `venv` with a single tool and handles the Python version automatically.
+
+### 1. Clone and install the Python package
+
+```bash
+git clone https://github.com/lichman0405/raspa-mcp
 cd raspa-mcp
-
-# 2. Create virtualenv (Python 3.11+)
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-# 3. Install
-pip install -e ".[dev]"
+uv sync
 ```
 
-RASPA2 itself is not bundled. Install it separately:
+`uv sync` creates a virtual environment under `.venv/`, pins the Python version (3.11+), and installs all dependencies — no manual `venv` or `pip` needed.
+
+### 2. Compile and configure RASPA2 (one-time setup)
 
 ```bash
-# via conda (recommended)
-conda install -c conda-forge raspa2
-
-# or let raspa-mcp install it for you
-raspa-mcp  # then call install_raspa2() from your agent
+uv run raspa-mcp-setup
 ```
 
-> RASPA2 source: [https://github.com/iRASPA/RASPA2](https://github.com/iRASPA/RASPA2)
+This single command:
+- Detects build tools (`git`, `gcc`, `autoconf`, `automake`) — install them first if missing
+- Clones [RASPA2 from GitHub](https://github.com/iRASPA/RASPA2) and compiles from source
+- Installs to `/opt/raspa2` by default (override with `--prefix`)
+- Writes `RASPA_DIR` and `PATH` exports to your shell RC file automatically
+
+```bash
+# custom install prefix:
+uv run raspa-mcp-setup --prefix $HOME/.local/raspa2
+
+# force reinstall even if already present:
+uv run raspa-mcp-setup --force
+```
+
+After the command finishes, reload your shell:
+
+```bash
+source ~/.bashrc   # or ~/.zshrc, ~/.profile, etc.
+```
+
+**Build dependencies (Ubuntu/Debian):**
+```bash
+sudo apt-get install git gcc autoconf automake libtool
+```
+
+**Build dependencies (macOS):**
+```bash
+brew install autoconf automake libtool
+```
+
+> RASPA2 source: [https://github.com/iRASPA/RASPA2](https://github.com/iRASPA/RASPA2)  
 > Reference: D. Dubbeldam, S. Calero, D.E. Ellis, R.Q. Snurr, *Mol. Simul.* **42**, 81–101 (2016)
 
 ---
@@ -104,8 +139,8 @@ Add to your `featherflow` config:
   "tools": {
     "mcpServers": {
       "raspa2": {
-        "command": "python",
-        "args": ["-m", "raspa_mcp.server"],
+        "command": "uv",
+        "args": ["run", "raspa-mcp"],
         "toolTimeout": 30,
         "env": {}
       }
@@ -120,15 +155,14 @@ Your agent can now autonomously:
 User: Study CO2 adsorption in ZIF-8 at 298 K from 0.1 to 50 bar.
 
 Agent:
-  1. raspa-mcp.check_raspa2_environment()
-  2. raspa-mcp.get_simulation_template("VoidFraction")   → run RASPA2
-  3. raspa-mcp.parse_raspa_output(...)                   → void fraction = 0.47
-  4. raspa-mcp.get_simulation_template("GCMC")           → fill placeholders × 7 pressures
-  5. raspa-mcp.validate_simulation_input(...)            → clean
-  6. shell_exec → RASPA2 × 7
-  7. raspa-mcp.parse_raspa_output(...)                   → isotherm data
-  8. raspa-mcp.plot_isotherm(...)                        → ZIF-8_CO2.png
-  9. feishu-mcp.upload_file_and_share(...)               → report delivered
+  1. raspa-mcp.get_simulation_template("VoidFraction")   → run RASPA2
+  2. raspa-mcp.parse_raspa_output(...)                   → void fraction = 0.47
+  3. raspa-mcp.get_simulation_template("GCMC")           → fill placeholders × 7 pressures
+  4. raspa-mcp.validate_simulation_input(...)            → clean
+  5. shell_exec → RASPA2 × 7
+  6. raspa-mcp.parse_raspa_output(...)                   → isotherm data
+  7. raspa-mcp.plot_isotherm(...)                        → ZIF-8_CO2.png
+  8. feishu-mcp.upload_file_and_share(...)               → report delivered
 ```
 
 No human intervention required.
@@ -159,15 +193,14 @@ No human intervention required.
 | `plot_isotherm_comparison` | Visualization |
 | `plot_density_slice` | Visualization |
 | `check_raspa2_environment` | Environment |
-| `install_raspa2` | Environment |
 
 ---
 
 ## Testing
 
 ```bash
-pytest tests/ -q          # 41 tests, ~1.5 s
-ruff check raspa_mcp/ tests/
+uv run pytest tests/ -q          # 41 tests, ~1.5 s
+uv run ruff check raspa_mcp/ tests/
 ```
 
 ---
@@ -177,10 +210,10 @@ ruff check raspa_mcp/ tests/
 ```
 raspa-mcp/
 ├── raspa_mcp/
-│   ├── server.py        # 21 MCP tools (FastMCP, stdio transport)
+│   ├── server.py        # 20 MCP tools (FastMCP, stdio transport)
 │   ├── parser.py        # Output parsers (loading, RDF, MSD, TI, density)
 │   ├── validator.py     # Input validator (20+ rule checks)
-│   ├── installer.py     # RASPA2 env detection + conda/source install
+│   ├── installer.py     # RASPA2 env detection + source build + raspa-mcp-setup CLI
 │   └── data/
 │       ├── templates.py    # 12 simulation.input templates
 │       ├── molecules.py    # 6 molecule definitions + metadata

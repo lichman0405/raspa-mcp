@@ -15,15 +15,19 @@ dependencies = [
     "numpy>=1.24",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
 ]
 
+[tool.uv]
+requires-python = ">=3.11"
+
 [project.scripts]
 raspa-mcp = "raspa_mcp.server:main"
+raspa-mcp-setup = "raspa_mcp.installer:setup"
 
 [tool.hatch.build.targets.wheel]
 packages = ["raspa_mcp"]

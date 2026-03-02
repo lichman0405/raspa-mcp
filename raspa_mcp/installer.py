@@ -1,14 +1,16 @@
 """
-raspa_mcp.installer — RASPA2 environment detection and auto-installation.
+raspa_mcp.installer — RASPA2 environment detection and source-based installation.
 
 Detection checks:
   1. 'simulate' binary is on PATH
   2. RASPA_DIR environment variable is set and points to a valid directory
   3. Essential force field files exist under $RASPA_DIR
 
-Auto-install supports:
-  - conda  : conda install -c conda-forge raspa2  (recommended)
-  - source : git clone + autoconf + make install
+Installation:
+  - source only: git clone + autoconf + make install  (no conda required)
+
+CLI entry point:
+  raspa-mcp-setup [--prefix /opt/raspa2] [--force]
 """
 
 from __future__ import annotations
@@ -83,7 +85,7 @@ def check_environment() -> RaspaEnvironment:
             "RASPA2 is not installed or not added to PATH."
         )
         env.suggestions.append(
-            "Install RASPA2 via conda: conda install -c conda-forge raspa2"
+            "Run: raspa-mcp-setup  (compiles RASPA2 from source into /opt/raspa2)"
         )
 
     # 2. Check RASPA_DIR
@@ -107,8 +109,8 @@ def check_environment() -> RaspaEnvironment:
             "RASPA2 requires this to locate force field and molecule files."
         )
         env.suggestions.append(
-            "Add to ~/.bashrc: export RASPA_DIR=$(conda info --base)/envs/<env>  "
-            "or export RASPA_DIR=/path/to/raspa2/install"
+            "Run: raspa-mcp-setup  — it will compile RASPA2 and write RASPA_DIR "
+            "to your shell RC file automatically."
         )
 
     # 3. Check essential force field files under $RASPA_DIR
@@ -168,60 +170,6 @@ def _run(cmd: list[str], cwd: str | None = None, env: dict | None = None) -> tup
     output = result.stdout + result.stderr
     return result.returncode, output
 
-
-def install_via_conda(conda_env: str = "base") -> dict:
-    """
-    Install RASPA2 via conda-forge into the specified conda environment.
-    After install, emit the required environment variable configuration.
-    """
-    log: list[str] = []
-    errors: list[str] = []
-
-    # Check conda is available
-    conda_bin = shutil.which("conda") or shutil.which("mamba")
-    if not conda_bin:
-        return {
-            "success": False,
-            "errors": ["conda/mamba not found on PATH. Install Miniconda or Anaconda first."],
-            "log": [],
-        }
-
-    log.append(f"Using conda binary: {conda_bin}")
-
-    # Install raspa2
-    log.append("Running: conda install -c conda-forge raspa2 ...")
-    if conda_env == "base":
-        cmd = [conda_bin, "install", "-c", "conda-forge", "raspa2", "-y"]
-    else:
-        cmd = [conda_bin, "install", "-n", conda_env, "-c", "conda-forge", "raspa2", "-y"]
-
-    rc, out = _run(cmd)
-    log.append(out[-3000:])  # last 3000 chars to avoid huge output
-    if rc != 0:
-        errors.append(f"conda install failed (exit {rc}). See log for details.")
-        return {"success": False, "errors": errors, "log": log}
-
-    log.append("conda install completed.")
-
-    # Determine RASPA_DIR
-    rc2, conda_prefix = _run([conda_bin, "run", "-n", conda_env, "bash", "-c",
-                               "echo $CONDA_PREFIX"])
-    raspa_dir = conda_prefix.strip() or os.environ.get("CONDA_PREFIX", "")
-
-    env_setup = _build_env_setup(raspa_dir)
-
-    return {
-        "success": True,
-        "method": "conda",
-        "raspa_dir": raspa_dir,
-        "log": log,
-        "errors": errors,
-        "env_setup": env_setup,
-        "next_step": (
-            f"Append env_setup.export_lines to {env_setup['rc_file']}, "
-            f"then run: {env_setup['reload_command']}"
-        ),
-    }
 
 
 def install_from_source(install_prefix: str = "/opt/raspa2") -> dict:
@@ -380,3 +328,107 @@ def _build_env_setup(raspa_dir: str) -> dict:
             "If this is wrong, manually add the export_lines to your shell's RC file."
         ),
     }
+
+
+# ─────────────────────────────────────────────────────────────────
+# CLI entry point:  raspa-mcp-setup
+# ─────────────────────────────────────────────────────────────────
+
+def setup(argv: list[str] | None = None) -> None:
+    """
+    CLI command: raspa-mcp-setup [--prefix /opt/raspa2] [--force]
+
+    Checks whether RASPA2 is already installed.
+    If not (or --force is given), compiles and installs it from source,
+    then writes RASPA_DIR / PATH exports to the user's shell RC file.
+
+    Exit codes:
+      0 — already installed or installation succeeded
+      1 — installation failed (details printed to stderr)
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="raspa-mcp-setup",
+        description="Compile and install RASPA2 from source, then configure the environment.",
+    )
+    parser.add_argument(
+        "--prefix",
+        default="/opt/raspa2",
+        help="Installation prefix (default: /opt/raspa2)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-install even if RASPA2 seems to be present already.",
+    )
+    args = parser.parse_args(argv)
+
+    # ── Step 1: check current state ──────────────────────────────
+    env = check_environment()
+    if env.ready and not args.force:
+        print(
+            f"[raspa-mcp-setup] RASPA2 already installed.\n"
+            f"  simulate : {env.simulate_path}\n"
+            f"  RASPA_DIR: {env.raspa_dir}\n"
+            "Nothing to do. Use --force to reinstall."
+        )
+        sys.exit(0)
+
+    if not env.ready:
+        print("[raspa-mcp-setup] RASPA2 not found. Starting source compilation ...")
+    else:
+        print("[raspa-mcp-setup] --force set. Reinstalling RASPA2 ...")
+
+    # ── Step 2: compile from source ──────────────────────────────
+    result = install_from_source(install_prefix=args.prefix)
+
+    if not result["success"]:
+        print("[raspa-mcp-setup] ERROR: installation failed.", file=sys.stderr)
+        for err in result.get("errors", []):
+            print(f"  {err}", file=sys.stderr)
+        print("\nBuild log (last entries):", file=sys.stderr)
+        for line in result.get("log", [])[-10:]:
+            print(f"  {line}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Step 3: write env vars to shell RC ───────────────────────
+    env_setup = result["env_setup"]
+    rc_file: str = env_setup["rc_file"]
+    export_lines: list[str] = env_setup["export_lines"]
+    rc_path = Path(rc_file)
+
+    marker = "# raspa-mcp-setup: RASPA2 environment"
+    block = f"\n{marker}\n" + "\n".join(export_lines) + "\n"
+
+    existing = rc_path.read_text(encoding="utf-8") if rc_path.exists() else ""
+    if marker in existing:
+        # Overwrite the existing block (idempotent)
+        import re
+        existing = re.sub(
+            rf"\n{re.escape(marker)}\n.*?(?=\n#|\Z)",
+            block,
+            existing,
+            flags=re.DOTALL,
+        )
+        rc_path.write_text(existing, encoding="utf-8")
+        action = "updated"
+    else:
+        with rc_path.open("a", encoding="utf-8") as f:
+            f.write(block)
+        action = "appended to"
+
+    # ── Step 4: export into current process so server can start ──
+    raspa_dir: str = result["raspa_dir"]
+    os.environ["RASPA_DIR"] = raspa_dir
+    os.environ["PATH"] = f"{raspa_dir}/bin:{os.environ.get('PATH', '')}"
+
+    print(
+        f"[raspa-mcp-setup] Installation complete.\n"
+        f"  RASPA_DIR : {raspa_dir}\n"
+        f"  simulate  : {raspa_dir}/bin/simulate\n"
+        f"  RC file   : {action} {rc_file}\n"
+        f"\nReload your shell or run:\n"
+        f"  source {rc_file}"
+    )

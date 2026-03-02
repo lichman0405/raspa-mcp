@@ -346,9 +346,17 @@ def install_from_source(install_prefix: str = str(Path.home() / ".local" / "rasp
                 log.append(out[-1000:])
                 return {"success": False, "errors": errors, "log": log}
 
-        # CFLAGS: suppress warnings-as-errors that break compilation on modern GCC
+        # CFLAGS: suppress warnings-as-errors that break compilation on modern GCC.
+        # GCC 14+ promotes -Wincompatible-pointer-types to error by default;
+        # RASPA2 src has printf(stderr, ...) instead of fprintf which triggers it.
         build_env = {
-            "CFLAGS": "-Wno-error -Wno-unused-result -Wno-implicit-function-declaration"
+            "CFLAGS": (
+                "-Wno-error "
+                "-Wno-unused-result "
+                "-Wno-implicit-function-declaration "
+                "-Wno-incompatible-pointer-types "
+                "-Wno-int-conversion"
+            )
         }
 
         # Configure

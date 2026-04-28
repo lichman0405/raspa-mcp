@@ -120,8 +120,12 @@ def _parse_energy(text: str) -> dict | None:
         text,
     )
     if m:
-        result["host_adsorbate_energy_kJ_mol"] = float(m.group(1)) / 1000.0  # K → kJ/mol (approx)
-        result["host_adsorbate_energy_err"] = float(m.group(2)) / 1000.0
+        # RASPA2 reports host-adsorbate energy in Kelvin; convert via the molar
+        # gas constant R = 8.314462618 J/(mol·K)  →  kJ/mol.
+        # (Previous code used /1000.0 which silently produced values ~8.3× too small.)
+        _K_TO_KJ_PER_MOL = 8.314462618e-3
+        result["host_adsorbate_energy_kJ_mol"] = float(m.group(1)) * _K_TO_KJ_PER_MOL
+        result["host_adsorbate_energy_err"] = float(m.group(2)) * _K_TO_KJ_PER_MOL
 
     # 1-4: Isosteric heat of adsorption Qst [kJ/mol] — computed by RASPA2 from energy fluctuations
     m = re.search(
@@ -738,6 +742,22 @@ def parse_msd_output(
 
         # Use latter 50 % of data for linear fit (skip ballistic regime)
         split = max(1, len(t_arr) // 2)
+
+        # numpy.polyfit(deg=1) needs at least 2 points; bail out gracefully on
+        # very short MSD trajectories instead of raising RankWarning / crashing.
+        if len(t_arr) - split < 2:
+            datasets.append({
+                "file": str(fpath),
+                "molecule": fpath.stem.replace(prefix + "_", ""),
+                "diffusion_type": diffusion_type,
+                "n_points": len(times),
+                "error": (
+                    f"Not enough points for linear fit: have {len(t_arr) - split} "
+                    f"point(s) in latter half (need >= 2). Run a longer MD trajectory."
+                ),
+            })
+            continue
+
         slope, intercept = np.polyfit(t_arr[split:], msd_arr[split:], 1)
 
         # D = slope / 6  [A^2/ps]  ->  m^2/s  (1 A^2/ps = 1e-8 m^2/s)

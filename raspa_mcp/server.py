@@ -407,17 +407,49 @@ def create_workspace(
         work_dir: Absolute path for the new simulation directory.
         framework_name: Name matching the CIF file (without .cif extension).
         cif_source_path: Absolute path to the existing CIF file.
+
+    Security:
+        ``work_dir`` must resolve to a path inside the allowed workspace base,
+        controlled by the ``RASPA_MCP_WORKSPACE_BASE`` environment variable
+        (default: ``~/raspa_workspaces``). This prevents an LLM from creating
+        directories or copying files at arbitrary filesystem locations
+        (e.g. ``/etc``, ``/root``) when this MCP runs as a privileged user.
     """
+    import os
+
     work_path = Path(work_dir)
     cif_path = Path(cif_source_path)
 
     errors = []
+
+    # --- workspace sandbox check ---------------------------------------
+    base_env = os.environ.get("RASPA_MCP_WORKSPACE_BASE", "").strip()
+    base_path = Path(base_env).expanduser() if base_env else (Path.home() / "raspa_workspaces")
+    try:
+        base_resolved = base_path.resolve()
+        # Resolve work_path against parents that exist; for not-yet-created
+        # directories we still want to know where it would land.
+        work_resolved = Path(work_path).expanduser().resolve()
+    except (OSError, RuntimeError) as e:
+        return {"success": False, "errors": [f"Cannot resolve paths: {e}"]}
+
+    try:
+        work_resolved.relative_to(base_resolved)
+    except ValueError:
+        errors.append(
+            f"work_dir {work_resolved} is outside allowed base {base_resolved}. "
+            f"Set RASPA_MCP_WORKSPACE_BASE to override the allowed root."
+        )
 
     if not cif_path.exists():
         errors.append(f"CIF file not found: {cif_source_path}")
 
     if errors:
         return {"success": False, "errors": errors}
+
+    # Use the resolved, sandbox-checked path from here on.
+    work_path = work_resolved
+    # -------------------------------------------------------------------
 
     # Create directory structure
     dirs_created = []
@@ -738,7 +770,8 @@ def plot_density_slice(
             "density_mean": float(data.mean()),
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("plot_density_slice failed")
+        return {"status": "error", "message": str(e), "type": type(e).__name__}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -896,7 +929,8 @@ def plot_isotherm(
         return {"status": "ok", "path": output_path, "n_points": len(pressures)}
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("plot_isotherm failed")
+        return {"status": "error", "message": str(e), "type": type(e).__name__}
 
 
 @mcp.tool()
@@ -1000,7 +1034,8 @@ def plot_isotherm_comparison(
         return {"status": "ok", "path": output_path, "n_series": n_plotted}
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("plot_isotherm_comparison failed")
+        return {"status": "error", "message": str(e), "type": type(e).__name__}
 
 
 # ─────────────────────────────────────────────────────────────────

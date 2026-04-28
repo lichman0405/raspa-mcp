@@ -269,8 +269,20 @@ def _run_streaming(
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
-    t.join()
+        # Graceful shutdown cascade: SIGTERM → wait → SIGKILL.
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        # Always join the reader so we don't lose buffered output, but
+        # cap the wait so a stuck reader cannot block the caller forever.
+        t.join(timeout=5)
     return proc.returncode, "\n".join(merged)
 
 

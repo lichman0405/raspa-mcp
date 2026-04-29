@@ -191,6 +191,44 @@ No human intervention required.
 | `plot_isotherm_comparison` | Visualization |
 | `plot_density_slice` | Visualization |
 | `check_raspa2_environment` | Environment |
+| `generate_force_field_def` | Custom workflow |
+| `generate_force_field_mixing_rules_def` | Custom workflow |
+| `generate_pseudo_atoms_def` | Custom workflow |
+| `generate_molecule_def` | Custom workflow |
+| `inspect_cif` | Custom workflow |
+| `recommend_supercell` | Custom workflow |
+| `preflight_workspace` | Custom workflow |
+| `get_workflow_recipe` | Custom workflow |
+
+---
+
+## Custom-everything workflow
+
+When you bring your own CIF, your own force field, and your own molecule
+definitions, the tooling above gives you safe builders for every file RASPA2
+expects:
+
+```text
+inspect_cif(cif)               → formula, cell, charges, overlap warnings
+recommend_supercell(cif, 12)   → UnitCells line + ChargeMethod hint
+create_workspace(work, name, cif)
+generate_force_field_def(work)                       # safe "3 zeros" overwrite file
+generate_force_field_mixing_rules_def(work, atom_types=[...])  # LJ ε/σ
+generate_pseudo_atoms_def(work, atoms=[...])         # atom registry
+generate_molecule_def(work, "MyAdsorbate", ...)      # per-molecule .def
+preflight_workspace(work)                            # cross-file sanity
+```
+
+> **`force_field.def` ≠ `force_field_mixing_rules.def`**.
+> The first file is *overwrite rules* (use the "3 zeros" minimum for almost
+> every job). The second file is where Lennard-Jones ε/σ live. Mixing them up
+> is the single most common cause of cryptic `:#` parse errors from RASPA2.
+> The generators emit the correct format for both.
+
+For an end-to-end recipe call `get_workflow_recipe("custom_mof_gcmc")`.
+
+All write operations are sandboxed under `RASPA_MCP_WORKSPACE_BASE`
+(default `~/raspa_workspaces`) — paths outside that root are rejected.
 
 ---
 

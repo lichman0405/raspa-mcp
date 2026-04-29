@@ -44,7 +44,18 @@ from raspa_mcp.parser import parse_msd_output as _parse_msd_output
 from raspa_mcp.parser import parse_output as _parse_output
 from raspa_mcp.parser import parse_rdf_output as _parse_rdf_output
 from raspa_mcp.parser import parse_ti_output as _parse_ti_output
+from raspa_mcp.validator import preflight_workspace as _preflight
 from raspa_mcp.validator import validate_simulation_input as _validate
+from raspa_mcp.generators import (
+    render_force_field_def as _render_ff,
+    render_force_field_mixing_rules_def as _render_mix,
+    render_pseudo_atoms_def as _render_pa,
+    render_molecule_def as _render_mol,
+    write_force_field_def as _write_ff,
+    write_force_field_mixing_rules_def as _write_mix,
+    write_pseudo_atoms_def as _write_pa,
+    write_molecule_def as _write_mol,
+)
 
 # Module-level palette constants (used by plot_isotherm_comparison)
 _PLOT_COLORS = [
@@ -472,10 +483,15 @@ def create_workspace(
         "cif_copied_to": str(dest_cif),
         "next_steps": [
             f"1. Write simulation.input to: {work_path / 'simulation.input'}",
-            f"2. Write pseudo_atoms.def to: {work_path / 'pseudo_atoms.def'}",
-            f"3. Write force_field_mixing_rules.def to: {work_path / 'force_field_mixing_rules.def'}",
-            f"4. Write <molecule>.def to: {work_path / 'molecules' / 'TraPPE' / '<molecule>.def'}",
-            f"5. Run: cd {work_dir} && simulate",
+            "2. Generate force_field.def via generate_force_field_def(work_dir, ...) "
+            "— for the common case, no arguments produces the safe '3 zeros' overwrite file.",
+            "3. Generate force_field_mixing_rules.def via "
+            "generate_force_field_mixing_rules_def(work_dir, atom_types=[...]).",
+            "4. Generate pseudo_atoms.def via generate_pseudo_atoms_def(work_dir, atoms=[...]).",
+            "5. Generate per-molecule .def via generate_molecule_def(work_dir, molecule_name, ...).",
+            "6. Optional but recommended: call inspect_cif and recommend_supercell on your CIF.",
+            "7. Run preflight_workspace(work_dir) — only launch RASPA2 if it returns ok=True.",
+            f"8. Run: cd {work_dir} && simulate",
         ],
         "raspa_env_note": (
             "Ensure RASPA_DIR is set and 'simulate' is in PATH on the compute server. "
@@ -792,13 +808,47 @@ def get_parameter_docs(parameter_name: str | None = None) -> dict:
             "all_parameters": TEMPLATE_PARAMS,
             "common_mistakes": [
                 "Pressure in RASPA2 is in Pascal, not bar. 1 bar = 100000 Pa.",
-                "CutOff is in Angstroms. Ensure each unit cell axis >= 2 × CutOff.",
+                "CutOff is in Angstroms. Ensure each unit cell axis >= 2 × CutOff "
+                "(use recommend_supercell on the CIF if unsure).",
                 "FrameworkName must exactly match the CIF filename (without .cif).",
-                "MoleculeDefinition 'local' means look in ./molecules/TraPPE/.",
+                "MoleculeDefinition 'local' = $RASPA_DIR/share/raspa/molecules/local/, "
+                "NOT your working directory. To load from ./molecules/TraPPE/, use "
+                "'MoleculeDefinition TraPPE'.",
                 "Forcefield 'local' means look for pseudo_atoms.def in working directory.",
                 "SwapProbability must be > 0 for GCMC adsorption simulations.",
                 "HeliumVoidFraction is required for correct mol/kg loading conversion.",
+                "force_field.def vs force_field_mixing_rules.def — these are TWO different "
+                "files. The first holds overwrite/cross-pair rules ('3 zeros' minimum), "
+                "the second holds LJ epsilon/sigma per atom type. Mixing them up is the "
+                "single most common cause of cryptic ':#' parse errors.",
+                "ChargeMethod=Ewald + UseChargesFromCIFFile=no (or all-zero charges) "
+                "wastes ~30% of compute. Set ChargeMethod=None for neutral systems.",
             ],
+            "key_parameter_docs": {
+                "ChargeMethod": (
+                    "Method for electrostatics. Options: Ewald, Wolf, Truncated, None. "
+                    "Use 'None' if your CIF has no charges and adsorbates are non-polar."
+                ),
+                "UseChargesFromCIFFile": (
+                    "yes/no. When yes, RASPA2 reads _atom_site_charge from the CIF. "
+                    "Pair with ChargeMethod=Ewald."
+                ),
+                "EwaldPrecision": (
+                    "Relative precision for Ewald sum. 1e-5 for screening, 1e-6 production."
+                ),
+                "MoleculeDefinition": (
+                    "Subdirectory under ./molecules/ where RASPA2 looks for <name>.def. "
+                    "Avoid the value 'local' unless you really mean $RASPA_DIR/share/.../local/."
+                ),
+                "force_field.def": (
+                    "Overwrite-rules file. Must exist when Forcefield is set. "
+                    "Use generate_force_field_def() to produce a safe minimal version."
+                ),
+                "force_field_mixing_rules.def": (
+                    "LJ epsilon/sigma per atom type plus the general mixing rule "
+                    "(usually Lorentz-Berthelot). Use generate_force_field_mixing_rules_def()."
+                ),
+            },
         }
 
     doc = TEMPLATE_PARAMS.get(f"${{{parameter_name}}}")
@@ -1036,6 +1086,359 @@ def plot_isotherm_comparison(
     except Exception as e:
         logger.exception("plot_isotherm_comparison failed")
         return {"status": "error", "message": str(e), "type": type(e).__name__}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 10. Full-custom workflow: file generators
+# ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def generate_force_field_def(
+    work_dir: str,
+    rules_to_overwrite: list[dict] | None = None,
+    interactions_to_define: list[dict] | None = None,
+    mixing_rules_to_overwrite: list[dict] | None = None,
+    return_only: bool = False,
+) -> dict:
+    """
+    Generate ``force_field.def`` (the OVERWRITE-rules file) at ``work_dir``.
+
+    With no extra arguments, produces the safe minimal "3 zeros" form, which is
+    what most users actually need when their LJ parameters live in
+    ``force_field_mixing_rules.def``.
+
+    DO NOT confuse this file with ``force_field_mixing_rules.def`` — putting LJ
+    epsilon/sigma here is the most common cause of cryptic ``:#`` parse errors
+    from RASPA2. Use ``generate_force_field_mixing_rules_def`` for those.
+
+    Args:
+        work_dir: Workspace directory (must be inside ``RASPA_MCP_WORKSPACE_BASE``).
+        rules_to_overwrite, interactions_to_define, mixing_rules_to_overwrite:
+            Optional lists of ``{"line": str, "comment": str | None}`` entries.
+        return_only: If True, do not touch disk; just return the rendered text.
+    """
+    try:
+        if return_only:
+            content = _render_ff(
+                rules_to_overwrite=rules_to_overwrite,
+                interactions_to_define=interactions_to_define,
+                mixing_rules_to_overwrite=mixing_rules_to_overwrite,
+            )
+            return {"success": True, "dry_run": True, "content": content}
+        return _write_ff(
+            work_dir,
+            rules_to_overwrite=rules_to_overwrite,
+            interactions_to_define=interactions_to_define,
+            mixing_rules_to_overwrite=mixing_rules_to_overwrite,
+        )
+    except Exception as e:
+        logger.exception("generate_force_field_def failed")
+        return {"success": False, "errors": [str(e)], "type": type(e).__name__}
+
+
+@mcp.tool()
+def generate_force_field_mixing_rules_def(
+    work_dir: str,
+    atom_types: list[dict],
+    general_mixing_rule: str = "Lorentz-Berthelot",
+    general_truncation: str = "shifted",
+    tail_corrections: bool = True,
+    return_only: bool = False,
+) -> dict:
+    """
+    Generate ``force_field_mixing_rules.def`` — the LJ epsilon/sigma file.
+
+    Each ``atom_types`` item: ``{"name": str, "epsilon_K": float, "sigma_A":
+    float, "interaction": "lennard-jones", "comment": str | None}``.
+
+    For the "shifted vs truncated" choice, ``"shifted"`` zeroes the LJ
+    potential at the cutoff (smoother energies); ``"truncated"`` matches RASPA2
+    legacy behaviour. Set ``tail_corrections=True`` for fluid-phase work.
+
+    Args:
+        work_dir: Workspace directory (sandboxed).
+        atom_types: Required list of atom-type dicts.
+        general_mixing_rule: ``Lorentz-Berthelot`` (default) or ``Jorgensen``.
+        general_truncation: ``shifted`` (default) or ``truncated``.
+        tail_corrections: Apply analytic LJ tail corrections.
+        return_only: Dry-run; do not write to disk.
+    """
+    try:
+        if return_only:
+            content = _render_mix(
+                atom_types=atom_types,
+                general_mixing_rule=general_mixing_rule,
+                general_truncation=general_truncation,
+                tail_corrections=tail_corrections,
+            )
+            return {"success": True, "dry_run": True, "content": content}
+        return _write_mix(
+            work_dir,
+            atom_types=atom_types,
+            general_mixing_rule=general_mixing_rule,
+            general_truncation=general_truncation,
+            tail_corrections=tail_corrections,
+        )
+    except Exception as e:
+        logger.exception("generate_force_field_mixing_rules_def failed")
+        return {"success": False, "errors": [str(e)], "type": type(e).__name__}
+
+
+@mcp.tool()
+def generate_pseudo_atoms_def(
+    work_dir: str,
+    atoms: list[dict],
+    return_only: bool = False,
+) -> dict:
+    """
+    Generate ``pseudo_atoms.def`` — the atom registry. Every atom-type symbol
+    that appears in the CIF, in ``force_field_mixing_rules.def``, or in any
+    molecule ``.def`` must be listed here.
+
+    Each ``atoms`` item must include at minimum: ``name``, ``chem``, ``mass``,
+    ``charge``. Optional keys with defaults: ``print=yes``, ``print_as=name``,
+    ``oxidation=0``, ``polarization=0``, ``b_factor=1.0``, ``radii=1.0``,
+    ``connectivity=0``, ``anisotropic=0``, ``anisotropic_type='absolute'``,
+    ``tinker_type=0``.
+    """
+    try:
+        if return_only:
+            content = _render_pa(atoms)
+            return {"success": True, "dry_run": True, "content": content}
+        return _write_pa(work_dir, atoms)
+    except Exception as e:
+        logger.exception("generate_pseudo_atoms_def failed")
+        return {"success": False, "errors": [str(e)], "type": type(e).__name__}
+
+
+@mcp.tool()
+def generate_molecule_def(
+    work_dir: str,
+    molecule_name: str,
+    critical_temperature_K: float,
+    critical_pressure_Pa: float,
+    acentric_factor: float,
+    atoms: list[dict],
+    bonds: list[list] | None = None,
+    bends: list[list] | None = None,
+    torsions: list[list] | None = None,
+    rigid: bool = True,
+    n_groups: int = 1,
+    subdirectory: str = "TraPPE",
+    return_only: bool = False,
+) -> dict:
+    """
+    Generate a per-molecule ``.def`` file at
+    ``<work_dir>/molecules/<subdirectory>/<molecule_name>.def``.
+
+    ``atoms`` items: ``{"type": str, "x": float, "y": float, "z": float}``.
+    Coords are Å relative to the molecule centre of mass.
+
+    ``bonds`` items: ``[i, j, "RIGID_BOND"]`` (or any RASPA2 bond keyword).
+    ``bends`` items: ``[i, j, k, "<bend_keyword>"]``.
+    ``torsions`` items: ``[i, j, k, l, "<torsion_keyword>"]``.
+
+    Set ``MoleculeDefinition <subdirectory>`` in simulation.input so RASPA2
+    finds this file. Avoid ``MoleculeDefinition local`` — that points to
+    ``$RASPA_DIR/share/raspa/molecules/local/``, not your workspace.
+    """
+    try:
+        # Coerce list[list] to list[tuple] for the renderer.
+        b_t = [tuple(b) for b in (bonds or [])]
+        be_t = [tuple(b) for b in (bends or [])]
+        to_t = [tuple(t) for t in (torsions or [])]
+        if return_only:
+            content = _render_mol(
+                molecule_name=molecule_name,
+                critical_temperature_K=critical_temperature_K,
+                critical_pressure_Pa=critical_pressure_Pa,
+                acentric_factor=acentric_factor,
+                atoms=atoms,
+                bonds=b_t,
+                bends=be_t,
+                torsions=to_t,
+                rigid=rigid,
+                n_groups=n_groups,
+            )
+            return {"success": True, "dry_run": True, "content": content}
+        return _write_mol(
+            work_dir,
+            molecule_name=molecule_name,
+            subdirectory=subdirectory,
+            critical_temperature_K=critical_temperature_K,
+            critical_pressure_Pa=critical_pressure_Pa,
+            acentric_factor=acentric_factor,
+            atoms=atoms,
+            bonds=b_t,
+            bends=be_t,
+            torsions=to_t,
+            rigid=rigid,
+            n_groups=n_groups,
+        )
+    except Exception as e:
+        logger.exception("generate_molecule_def failed")
+        return {"success": False, "errors": [str(e)], "type": type(e).__name__}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 11. CIF inspection (requires ASE)
+# ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def inspect_cif(cif_path: str) -> dict:
+    """
+    Inspect a CIF file: formula, cell parameters, charge column status,
+    minimum interatomic distance. Flags common pitfalls (no charges,
+    non-neutral cell, atom overlap).
+
+    Use before launching a simulation against an unfamiliar CIF.
+    """
+    try:
+        from raspa_mcp.cif_tools import inspect_cif as _inspect
+        return _inspect(cif_path)
+    except ImportError as e:
+        return {
+            "status": "error",
+            "message": (
+                "ASE is required for inspect_cif. Install via "
+                "'pip install ase>=3.22' or rerun setup_mcps.sh."
+            ),
+            "type": type(e).__name__,
+            "detail": str(e),
+        }
+    except Exception as e:
+        logger.exception("inspect_cif failed")
+        return {"status": "error", "message": str(e), "type": type(e).__name__}
+
+
+@mcp.tool()
+def recommend_supercell(cif_path: str, cutoff_A: float = 12.0) -> dict:
+    """
+    Recommend an integer supercell (nx, ny, nz) such that each axis is at
+    least 2 × ``cutoff_A`` (the RASPA2 minimum-image rule). Also recommends
+    a ChargeMethod based on whether the CIF has non-zero charges.
+    """
+    try:
+        from raspa_mcp.cif_tools import recommend_supercell as _rec
+        return _rec(cif_path, cutoff_A=cutoff_A)
+    except ImportError as e:
+        return {
+            "status": "error",
+            "message": (
+                "ASE is required for recommend_supercell. Install via "
+                "'pip install ase>=3.22' or rerun setup_mcps.sh."
+            ),
+            "type": type(e).__name__,
+            "detail": str(e),
+        }
+    except Exception as e:
+        logger.exception("recommend_supercell failed")
+        return {"status": "error", "message": str(e), "type": type(e).__name__}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 12. Preflight: cross-file workspace check
+# ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def preflight_workspace(work_dir: str) -> dict:
+    """
+    Validate a workspace directory before launching ``simulate``.
+
+    Checks:
+      * simulation.input exists and passes validate_simulation_input
+      * the CIF named by FrameworkName exists at frameworks/<name>/<name>.cif
+      * force_field.def exists and is in overwrite-rules format (NOT mixing)
+      * force_field_mixing_rules.def exists and lists atom types
+      * pseudo_atoms.def covers every atom type used by the mixing-rules file
+      * each Component in simulation.input has a matching molecule .def
+
+    Returns ``{"ok": bool, "errors": [...], "warnings": [...], "findings": {...}}``.
+    """
+    try:
+        return _preflight(work_dir)
+    except Exception as e:
+        logger.exception("preflight_workspace failed")
+        return {"ok": False, "errors": [str(e)], "warnings": [], "findings": {}}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 13. Workflow recipes
+# ─────────────────────────────────────────────────────────────────
+
+_WORKFLOW_RECIPES: dict[str, dict] = {
+    "custom_mof_gcmc": {
+        "description": (
+            "Run GCMC adsorption on a user-supplied MOF CIF with a custom "
+            "force field and a custom adsorbate molecule."
+        ),
+        "steps": [
+            "1. inspect_cif(cif_path) — sanity-check formula, cell, charges, overlap.",
+            "2. recommend_supercell(cif_path, cutoff_A=12.0) — get UnitCells line.",
+            "3. create_workspace(work_dir, framework_name, cif_source_path).",
+            "4. generate_force_field_def(work_dir) — minimal '3 zeros' overwrite file.",
+            "5. generate_force_field_mixing_rules_def(work_dir, atom_types=[...]) — "
+            "list every atom type from the CIF + every adsorbate atom type.",
+            "6. generate_pseudo_atoms_def(work_dir, atoms=[...]) — same coverage.",
+            "7. generate_molecule_def(work_dir, molecule_name, ...) for each adsorbate.",
+            "8. Write simulation.input — set MoleculeDefinition <subdir>, ChargeMethod, "
+            "UnitCells (from step 2).",
+            "9. validate_simulation_input(content) on the simulation.input text.",
+            "10. preflight_workspace(work_dir) — must return ok=True before launch.",
+            "11. cd <work_dir> && simulate (or your scheduler).",
+            "12. parse_raspa_output(work_dir) when done.",
+        ],
+        "common_pitfalls": [
+            "Putting LJ epsilon/sigma in force_field.def — that file is overwrite-rules only.",
+            "Setting MoleculeDefinition local — points to $RASPA_DIR/share, not your workspace.",
+            "ChargeMethod=Ewald with all-zero charges in the CIF wastes time; use None.",
+            "UnitCells too small — each axis must be ≥ 2 × CutOff.",
+        ],
+    },
+    "henry_widom": {
+        "description": "Henry coefficient via Widom insertion at infinite dilution.",
+        "steps": [
+            "1–7. Same as custom_mof_gcmc steps 1–7.",
+            "8. Write simulation.input with SimulationType MonteCarlo and "
+            "WidomProbability 1.0 in the Component block.",
+            "9. preflight_workspace then launch.",
+            "10. parse_raspa_output(work_dir) — Henry coefficient is reported.",
+        ],
+    },
+    "diffusion_md": {
+        "description": "Self-diffusion coefficient from NVT-MD + MSD analysis.",
+        "steps": [
+            "1–7. Same as custom_mof_gcmc steps 1–7.",
+            "8. Write simulation.input with SimulationType MolecularDynamics, "
+            "Ensemble NVT, sensible TimeStep (e.g. 0.5 fs), Print/Sample MSD frequency.",
+            "9. preflight_workspace, launch.",
+            "10. parse_msd_output(work_dir, molecule=<name>, diffusion_type='self').",
+        ],
+    },
+}
+
+
+@mcp.tool()
+def get_workflow_recipe(scenario: str | None = None) -> dict:
+    """
+    Return an ordered, tool-by-tool recipe for a common RASPA2 scenario.
+
+    Args:
+        scenario: One of ``custom_mof_gcmc``, ``henry_widom``, ``diffusion_md``,
+                  or None to list all available scenarios.
+    """
+    if scenario is None:
+        return {
+            "scenarios": {
+                k: {"description": v["description"]} for k, v in _WORKFLOW_RECIPES.items()
+            }
+        }
+    if scenario not in _WORKFLOW_RECIPES:
+        return {
+            "error": f"Unknown scenario {scenario!r}.",
+            "available": sorted(_WORKFLOW_RECIPES.keys()),
+        }
+    return {"scenario": scenario, **_WORKFLOW_RECIPES[scenario]}
 
 
 # ─────────────────────────────────────────────────────────────────
